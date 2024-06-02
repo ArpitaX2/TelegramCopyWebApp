@@ -39,6 +39,10 @@
           <label for="toMessageId">To Message ID:</label>
           <input type="text" class="form-control" id="toMessageId">
         </div>
+        <div class="form-group">
+          <label for="interval">Interval (seconds):</label>
+          <input type="number" class="form-control" id="interval" min="1">
+        </div>
         <button type="button" class="btn btn-primary" onclick="startCopying()">Start</button>
       </form>
       <textarea id="outputArea" class="form-control mt-3" rows="5" readonly></textarea>
@@ -53,93 +57,88 @@
   <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
 
   <script>
-    // fetch and set the values from localstorage
-    document.getElementById('botToken').value = localStorage.getItem('botToken');
-    document.getElementById('fromChatId').value = localStorage.getItem('fromChatId');
-    document.getElementById('toChatId').value = localStorage.getItem('toChatId');
-    document.getElementById('fromMessageId').value = localStorage.getItem('fromMessageId');
-    document.getElementById('toMessageId').value = localStorage.getItem('toMessageId');
+    // Fetch and set the values from localStorage
+    document.getElementById('botToken').value = localStorage.getItem('botToken') || '';
+    document.getElementById('fromChatId').value = localStorage.getItem('fromChatId') || '';
+    document.getElementById('toChatId').value = localStorage.getItem('toChatId') || '';
+    document.getElementById('fromMessageId').value = localStorage.getItem('fromMessageId') || '';
+    document.getElementById('toMessageId').value = localStorage.getItem('toMessageId') || '';
+    document.getElementById('interval').value = localStorage.getItem('interval') || '';
+
     async function startCopying() {
-    // Retrieve input values
-    var botToken = document.getElementById('botToken').value;
-    var fromChatId = document.getElementById('fromChatId').value;
-    var toChatId = document.getElementById('toChatId').value;
-    var fromMessageId = parseInt(document.getElementById('fromMessageId').value); // Ensure integer type
-    var toMessageId = parseInt(document.getElementById('toMessageId').value); // Ensure integer type
-    // store all this in localstorage
-    localStorage.setItem('botToken', botToken);
-    localStorage.setItem('fromChatId', fromChatId);
-    localStorage.setItem('toChatId', toChatId);
-    localStorage.setItem('fromMessageId', fromMessageId);
-    localStorage.setItem('toMessageId', toMessageId);
+      // Retrieve input values
+      var botToken = document.getElementById('botToken').value;
+      var fromChatId = document.getElementById('fromChatId').value;
+      var toChatId = document.getElementById('toChatId').value;
+      var fromMessageId = parseInt(document.getElementById('fromMessageId').value); // Ensure integer type
+      var toMessageId = parseInt(document.getElementById('toMessageId').value); // Ensure integer type
+      var interval = parseInt(document.getElementById('interval').value) * 1000; // Convert to milliseconds
 
-    // Example of how you might want to construct the command line output
-    var commandLineOutput = "Begin Script Execution\n";
+      // Store all this in localStorage
+      localStorage.setItem('botToken', botToken);
+      localStorage.setItem('fromChatId', fromChatId);
+      localStorage.setItem('toChatId', toChatId);
+      localStorage.setItem('fromMessageId', fromMessageId);
+      localStorage.setItem('toMessageId', toMessageId);
+      localStorage.setItem('interval', interval / 1000);
 
-    // Append the output to the textarea
-    document.getElementById('outputArea').value += commandLineOutput + "\n";
+      // Construct the API URL
+      const bot_api = "https://api.telegram.org/bot";
+      const bot_method = "/copyMessage";
+      const api_url = bot_api + botToken + bot_method;
 
-    const bot_api = "https://api.telegram.org/bot";
-    const bot_method = "/copyMessages";
-    const api_url = bot_api + botToken + bot_method;
+      // Append initial command line output to the textarea
+      var commandLineOutput = "Begin Script Execution\n";
+      document.getElementById('outputArea').value += commandLineOutput;
 
-    // distribute the messages into chunks of 100 and count how many requests are needed
-    var messageCount = toMessageId - fromMessageId + 1; // Include the last message ID
-    var requests = Math.ceil(messageCount / 50);
-
-    // send the requests
-    for (var i = 0; i < requests; i++) {
-        var messageIds = []; // Clear the array at the beginning of each request iteration
-        // A JSON-serialized list of 1-100 identifiers of messages in the chat from_chat_id to copy. The identifiers must be specified in a strictly increasing order.
-        for (var j = 0; j < 50; j++) {
-            var messageId = fromMessageId + (i * 50) + j; // Adjust message ID based on iteration
-            if (messageId <= toMessageId) {
-                messageIds.push(messageId);
-            }
-        }
-
+      // Loop over each message ID
+      for (var messageId = fromMessageId; messageId <= toMessageId; messageId++) {
+        // JSON payload for the request
         let json = {
-            "from_chat_id": fromChatId,
-            "chat_id": toChatId,
-            "message_ids": messageIds
+          "from_chat_id": fromChatId,
+          "chat_id": toChatId,
+          "message_id": messageId
         };
 
+        // Make the request and handle the response
         while (true) {
+          try {
             const response = await fetch(api_url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(json)
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(json)
             });
+
             const data = await response.json();
-            console.log(data);
-            // Append the output to the textarea
             document.getElementById('outputArea').value += JSON.stringify(data) + "\n";
+
             if (response.status == 200) {
-                document.getElementById('outputArea').value += "Messages copied successfully" + "\n";
-                await sleep(5000);
-                break;
+              document.getElementById('outputArea').value += "Message " + messageId + " copied successfully\n";
+              break;
+            } else if (response.status == 429) {
+              document.getElementById('outputArea').value += "Too many requests\n";
+              let time_to_sleep = (data.parameters && data.parameters.retry_after) ? data.parameters.retry_after * 1000 : 5000;
+              await sleep(time_to_sleep + 5000); // Retry after waiting
+            } else {
+              document.getElementById('outputArea').value += "Error: " + data.description + "\n";
+              break;
             }
-            if (response.status == 429) {
-                document.getElementById('outputArea').value += "Too many requests" + "\n";
-                let time_to_sleep = data.parameters.retry_after * 1000;
-                await sleep(time_to_sleep + 5000);
-                // Retry the same request after waiting
-                continue;
-            }
-            if (response.status == 400) {
-                document.getElementById('outputArea').value += "Bad request" + "\n";
-                break;
-            }
+          } catch (error) {
+            document.getElementById('outputArea').value += "Request failed: " + error.message + "\n";
+            await sleep(5000); // Wait a bit before retrying
+          }
         }
+
+        // Wait for the specified interval before copying the next message
+        await sleep(interval);
+      }
     }
-}
 
-async function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
+    async function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
   </script>
 </body>
 </html>
